@@ -36,6 +36,67 @@ def load_database(csv_file):
     return procedures
 
 
+def get_existing_labels(asm_file):
+    """Extract all existing labels from assembly file."""
+    labels = set()
+    label_pattern = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*):', re.MULTILINE)
+
+    with open(asm_file, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+
+    for match in label_pattern.finditer(content):
+        labels.add(match.group(1))
+
+    return labels
+
+
+def check_name_collisions(procedures, existing_labels):
+    """
+    Check for name collisions before renaming.
+
+    Returns tuple: (is_valid, errors)
+    - is_valid: True if no collisions found
+    - errors: List of error messages describing collisions
+    """
+    errors = []
+
+    # Get set of old names being renamed
+    old_names = {p['old_name'] for p in procedures}
+
+    # Check 1: Duplicate new names within the batch
+    new_names_count = {}
+    for proc in procedures:
+        new_name = proc['new_name']
+        if new_name not in new_names_count:
+            new_names_count[new_name] = []
+        new_names_count[new_name].append(proc['old_name'])
+
+    for new_name, old_names_list in new_names_count.items():
+        if len(old_names_list) > 1:
+            errors.append(
+                f"DUPLICATE: '{new_name}' is assigned to multiple procedures: {', '.join(old_names_list)}"
+            )
+
+    # Check 2: New name collides with existing label (that we're not renaming)
+    for proc in procedures:
+        new_name = proc['new_name']
+        old_name = proc['old_name']
+
+        # Skip if new name equals old name (no rename)
+        if new_name == old_name:
+            continue
+
+        # Check if new name already exists as a label
+        if new_name in existing_labels:
+            # It's only a collision if that label is not being renamed itself
+            if new_name not in old_names:
+                errors.append(
+                    f"COLLISION: '{old_name}' -> '{new_name}' conflicts with existing label '{new_name}'"
+                )
+
+    return len(errors) == 0, errors
+
+
 def create_backup(source_file):
     """Create timestamped backup of assembly file."""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -57,11 +118,24 @@ def apply_renames(asm_file, procedures, dry_run=False):
         new_name = proc['new_name']
         description = proc['description']
 
-        print(f"  {old_name} -> {new_name}")
-
         # Count occurrences before
         old_pattern = re.compile(r'\b' + re.escape(old_name) + r'\b')
         occurrences_before = len(old_pattern.findall(content))
+
+        # Skip if procedure not found (already renamed)
+        if occurrences_before == 0:
+            print(f"  {old_name} -> SKIPPED (not found, likely already renamed)")
+            changes_log.append({
+                'old_name': old_name,
+                'new_name': new_name,
+                'occurrences_replaced': 0,
+                'remaining_old': 0,
+                'total_new': 0,
+                'skipped': True
+            })
+            continue
+
+        print(f"  {old_name} -> {new_name}")
 
         # 1. Replace function definition with comment
         # Pattern: sub_XXXXX: (with optional whitespace and comments)
@@ -129,14 +203,27 @@ def apply_renames(asm_file, procedures, dry_run=False):
         immediate_pattern = re.compile(r'#' + re.escape(old_name) + r'\b')
         content = immediate_pattern.sub(f'#{new_name}', content)
 
-        # 10. Replace in cross-reference comments
+        # 10. Replace PC-relative addressing: jsr/jmp/lea sub_XXXXX(pc)
+        pcrel_pattern = re.compile(r'\b(jsr|jmp|lea)\s+' + re.escape(old_name) + r'\(pc\)')
+        content = pcrel_pattern.sub(rf'\1 {new_name}(pc)', content)
+
+        # 10a. Replace in arithmetic expressions: sub_XXXXX-label or sub_XXXXX+label
+        # Used in offset tables: dc.w label-base or label+base or base-label
+        # Right side: -sub_XXXXX or +sub_XXXXX
+        expr_right_pattern = re.compile(r'([-+])\s*' + re.escape(old_name) + r'\b')
+        content = expr_right_pattern.sub(rf'\1{new_name}', content)
+        # Left side: sub_XXXXX- or sub_XXXXX+
+        expr_left_pattern = re.compile(r'\b' + re.escape(old_name) + r'\s*([-+])')
+        content = expr_left_pattern.sub(rf'{new_name}\1', content)
+
+        # 11. Replace in cross-reference comments
         # ; CODE XREF: sub_XXXXX+XX
         xref_pattern = re.compile(
             r'(;\s*(?:CODE|DATA)\s+XREF:\s+)' + re.escape(old_name) + r'\b'
         )
         content = xref_pattern.sub(r'\1' + new_name, content)
 
-        # 11. Replace "End of function" markers
+        # 12. Replace "End of function" markers
         end_pattern = re.compile(
             r'^(;\s*End of function\s+)' + re.escape(old_name) + r'\s*$',
             re.MULTILINE
@@ -155,7 +242,8 @@ def apply_renames(asm_file, procedures, dry_run=False):
             'new_name': new_name,
             'occurrences_replaced': occurrences_before - remaining_old,
             'remaining_old': remaining_old,
-            'total_new': occurrences_after
+            'total_new': occurrences_after,
+            'skipped': False
         })
 
     # Write changes if not dry-run
@@ -166,12 +254,55 @@ def apply_renames(asm_file, procedures, dry_run=False):
     return changes_log, len(content) != len(original_content)
 
 
+def update_analysis_report(report_file, renamed_procedures):
+    """Mark renamed procedures as processed in analysis_report.csv."""
+    if not report_file.exists():
+        print(f"Note: Analysis report not found: {report_file}")
+        print("      Skipping processed tracking")
+        return
+
+    # Read existing report
+    rows = []
+    with open(report_file, 'r', encoding='utf-8', newline='') as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+
+        # Add 'processed' column if not present
+        if 'processed' not in fieldnames:
+            fieldnames = list(fieldnames) + ['processed']
+
+        # Process rows
+        for row in reader:
+            # Add processed column with default value if needed
+            if 'processed' not in row:
+                row['processed'] = ''
+
+            # Mark procedure as processed if it was renamed
+            if row['procedure'] in renamed_procedures:
+                row['processed'] = 'true'
+
+            rows.append(row)
+
+    # Write back
+    with open(report_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    processed_count = sum(1 for r in rows if r['processed'] == 'true')
+    print(f"\nUpdated {report_file.name}:")
+    print(f"  Marked {len(renamed_procedures)} procedures as processed")
+    print(f"  Total processed: {processed_count}/{len(rows)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Apply procedure renames from database')
     parser.add_argument('--database', default='procedure_database.csv',
                        help='Procedure database CSV')
     parser.add_argument('--source', default='alien_soldier_j.s',
                        help='Assembly source file')
+    parser.add_argument('--report', default='analysis_report.csv',
+                       help='Analysis report CSV to mark procedures as processed')
     parser.add_argument('--project-dir', default='.',
                        help='Project directory')
     parser.add_argument('--dry-run', action='store_true',
@@ -187,6 +318,7 @@ def main():
     db_file = project_dir / args.database
     asm_file = project_dir / args.source
     log_file = project_dir / args.log
+    report_file = project_dir / args.report
 
     if not db_file.exists():
         print(f"Error: Database file not found: {db_file}")
@@ -205,6 +337,25 @@ def main():
         return 0
 
     print(f"Found {len(procedures)} procedures to rename")
+
+    # Check for name collisions BEFORE making any changes
+    print(f"\nChecking for name collisions...")
+    existing_labels = get_existing_labels(asm_file)
+    print(f"  Found {len(existing_labels)} existing labels in source file")
+
+    is_valid, collision_errors = check_name_collisions(procedures, existing_labels)
+
+    if not is_valid:
+        print("\n" + "=" * 80)
+        print("ERROR: Name collisions detected! Cannot proceed with renaming.")
+        print("=" * 80)
+        for error in collision_errors:
+            print(f"  {error}")
+        print("\nPlease fix these collisions in the database and try again.")
+        print("Each new name must be unique and not conflict with existing labels.")
+        return 1
+
+    print("  No collisions found - all new names are unique")
 
     if args.dry_run:
         print("\n*** DRY RUN MODE - No changes will be applied ***\n")
@@ -226,11 +377,15 @@ def main():
 
         for change in changes_log:
             f.write(f"{change['old_name']} -> {change['new_name']}\n")
-            f.write(f"  Replaced: {change['occurrences_replaced']} occurrences\n")
-            f.write(f"  New references: {change['total_new']}\n")
 
-            if change['remaining_old'] > 0:
-                f.write(f"  WARNING: {change['remaining_old']} old references remain!\n")
+            if change.get('skipped', False):
+                f.write(f"  SKIPPED: Procedure not found (likely already renamed)\n")
+            else:
+                f.write(f"  Replaced: {change['occurrences_replaced']} occurrences\n")
+                f.write(f"  New references: {change['total_new']}\n")
+
+                if change['remaining_old'] > 0:
+                    f.write(f"  WARNING: {change['remaining_old']} old references remain!\n")
 
             f.write("\n")
 
@@ -241,9 +396,19 @@ def main():
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"Procedures renamed: {len(changes_log)}")
 
-    warnings = [c for c in changes_log if c['remaining_old'] > 0]
+    renamed = [c for c in changes_log if not c.get('skipped', False)]
+    skipped = [c for c in changes_log if c.get('skipped', False)]
+
+    print(f"Procedures renamed: {len(renamed)}")
+    if skipped:
+        print(f"Procedures skipped (already renamed): {len(skipped)}")
+        for c in skipped[:5]:
+            print(f"  {c['old_name']}")
+        if len(skipped) > 5:
+            print(f"  ... and {len(skipped) - 5} more")
+
+    warnings = [c for c in changes_log if c['remaining_old'] > 0 and not c.get('skipped', False)]
     if warnings:
         print(f"\nWARNINGS: {len(warnings)} procedures have remaining old references:")
         for c in warnings[:5]:
@@ -256,15 +421,23 @@ def main():
         print(f"Review the log at {log_file}")
         print("Run without --dry-run to apply changes")
     else:
+        # Always mark procedures as processed if we have any in the log
+        if changes_log:
+            renamed_procs = [c['old_name'] for c in changes_log]
+            update_analysis_report(report_file, renamed_procs)
+
         if has_changes:
             print(f"\n*** CHANGES APPLIED to {asm_file} ***")
             print(f"Backup: {backup_file if not args.no_backup else 'NONE'}")
             print(f"Log: {log_file}")
+
             print("\nNext steps:")
             print("  1. Review changes with: git diff alien_soldier_j.s")
             print("  2. Build ROM: make build")
             print("  3. Test that ROM works correctly")
             print("  4. Commit if everything looks good")
+        elif skipped:
+            print(f"\n*** All procedures already renamed, marked as processed ***")
         else:
             print("\nNo changes made (procedures may already be renamed)")
 
