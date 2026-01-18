@@ -266,7 +266,7 @@ This pinpoints exactly when and where the bug manifests in memory.
 
 ## References
 
-- Gens-rr source: `gens-rerecording/Gens-rr/src/`
+- Gens-automation source: `gens_automation/src/`
 - Existing automation: `automation.cpp`, `screenshot.cpp`
 - Format implementation: `scripts/genstate_format.py`
 - Comparison tool: `scripts/compare_states.py`

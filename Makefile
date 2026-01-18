@@ -6,6 +6,9 @@ AS_BIN = bin/asw.exe
 P2BIN = bin/p2bin.exe
 AS_ARGS = -maxerrors 2
 
+# Set message path for AS assembler (needed for as.msg, cmdarg.msg, etc.)
+export AS_MSGPATH = bin
+
 # Files
 SRC = alien_soldier_j.s
 OBJ = alien_soldier_j.p
@@ -265,13 +268,12 @@ rename:
 	@echo "  3. Commit: git add $(SRC) && git commit"
 
 # Gens emulator paths
-GENS_DIR = gens-rerecording/Gens-rr
-GENS_SLN = $(GENS_DIR)/gens_vc10.sln
+GENS_DIR = gens_automation
 GENS_EXE = $(GENS_DIR)/Output/Gens.exe
-MSBUILD = C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe
+GENS_REPO = https://github.com/oranguthang/gens_automation.git
 
-# Debug: Build ROM and run with memory dump comparison mode
-# Compares memory dumps against reference, saves first diff and exits
+# Debug: Build ROM and run with screenshot + memory comparison
+# Stops after N visual differences (memory diffs won't end the run)
 # Usage: make debug MOVIE=tas|longplay|menus
 .PHONY: debug
 debug: build
@@ -284,7 +286,7 @@ ifndef MOVIE
 	@echo "  make debug MOVIE=tas"
 	@exit 1
 else
-	@echo "Running $(MOVIE) with memory dump comparison (debug mode)..."
+	@echo "Running $(MOVIE) with visual comparison (debug mode)..."
 	python -c "import os; os.makedirs('diffs/$(MOVIE)', exist_ok=True); os.makedirs('reports', exist_ok=True)"
 	"$(GENS_EXE)" \
 		-rom $(ROM) \
@@ -293,7 +295,8 @@ else
 		-screenshot-dir diffs/$(MOVIE) \
 		-reference-dir reference/$(MOVIE) \
 		$(if $(MAX_FRAMES_$(MOVIE)),-max-frames $(MAX_FRAMES_$(MOVIE)),) \
-		-max-diffs 1 \
+		-max-diffs 10 \
+		-max-memory-diffs 0 \
 		-compare-state-dumps \
 		-turbo \
 		-frameskip 0 \
@@ -306,8 +309,8 @@ else
 		--output-dir reports
 	@echo ""
 	@echo "Debug complete! Check:"
-	@echo "  - diffs/$(MOVIE)/*.genstate - Memory dump at first difference"
-	@echo "  - diffs/$(MOVIE)/*.png - Screenshot at first difference"
+	@echo "  - diffs/$(MOVIE)/*.genstate - Memory dumps for diff frames"
+	@echo "  - diffs/$(MOVIE)/*.png - Screenshots for diff frames"
 	@echo "  - reports/diff_frame_*.md - Detailed LLM-friendly analysis report"
 endif
 
@@ -319,12 +322,253 @@ stop:
 	-taskkill /F /IM python.exe 2>nul
 	@echo "Done"
 
-# Build Gens emulator
+# Build Gens emulator (clone if not present)
 .PHONY: build-gens
 build-gens:
+	@python -c "import os, subprocess; os.path.isdir('$(GENS_DIR)') or (print('Cloning gens_automation...'), subprocess.run(['git', 'clone', '$(GENS_REPO)', '$(GENS_DIR)']))"
 	@echo "Building Gens emulator..."
-	"$(MSBUILD)" "$(GENS_SLN)" -p:Configuration=Release -p:Platform=Win32 -p:PlatformToolset=v143 -t:Build -v:minimal
+	$(MAKE) -C $(GENS_DIR)
 	@echo "Build complete: $(GENS_EXE)"
+
+# Debug pointer issues by testing data blocks from END of ROM
+# Usage: make debug-pointers MOVIE=tas|longplay|menus [START=1BD000] [END=100000]
+.PHONY: debug-pointers
+debug-pointers:
+ifndef MOVIE
+	@echo "ERROR: MOVIE parameter required!"
+	@echo ""
+	@echo "Usage: make debug-pointers MOVIE=<type> [START=<hex>] [END=<hex>]"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make debug-pointers MOVIE=tas"
+	@echo "  make debug-pointers MOVIE=tas START=1BD000 END=100000"
+	@exit 1
+else
+	@echo "Debugging pointers with $(MOVIE) movie ($(ANALYSIS_WORKERS) workers)..."
+	@echo "Results will be saved to: diffs/$(MOVIE)/pointers/"
+	python $(SCRIPTS_DIR)/debug_pointers.py \
+		--project-dir . \
+		--source $(SRC) \
+		--rom $(ROM) \
+		--movie $(MOVIE_FILE_$(MOVIE)) \
+		--gens-exe $(GENS_EXE) \
+		--reference reference/$(MOVIE) \
+		--diffs diffs/$(MOVIE) \
+		--workers $(ANALYSIS_WORKERS) \
+		--grid-cols $(ANALYSIS_GRID_COLS) \
+		--interval $(ANALYSIS_INTERVAL) \
+		--frameskip $(ANALYSIS_FRAMESKIP) \
+		--diff-color $(ANALYSIS_DIFF_COLOR) \
+		$(if $(MAX_FRAMES_$(MOVIE)),--max-frames $(MAX_FRAMES_$(MOVIE)),) \
+		$(if $(START),--start-address $(START),) \
+		$(if $(END),--end-address $(END),)
+endif
+
+# Analyze pointer debug results and generate report
+report-pointers:
+ifndef MOVIE
+	@echo "ERROR: MOVIE parameter required!"
+	@echo ""
+	@echo "Usage: make report-pointers MOVIE=<type>"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make report-pointers MOVIE=tas"
+	@exit 1
+else
+	python $(SCRIPTS_DIR)/report_pointers.py --diffs-dir diffs/$(MOVIE)
+endif
+
+# Trace CPU execution after breakpoint
+# Usage: make trace MOVIE=tas BP=0xNNNN [FRAMES=20] [LOG=trace.log]
+# Example: make trace MOVIE=tas BP=0x11594 FRAMES=20 LOG=logs/trace_Boss.log
+.PHONY: trace
+trace:
+ifndef MOVIE
+	@echo "ERROR: MOVIE parameter required!"
+	@echo ""
+	@echo "Usage: make trace MOVIE=<type> BP=<hex_addr> [FRAMES=<n>] [LOG=<path>]"
+	@echo ""
+	@echo "Parameters:"
+	@echo "  MOVIE   - Movie type: tas, longplay, or menus"
+	@echo "  BP      - Breakpoint PC address in hex (e.g., 0x11594 or 11594)"
+	@echo "  FRAMES  - Number of frames to trace after breakpoint (default: 20)"
+	@echo "  LOG     - Path to trace log file (default: trace_<BP>.csv)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make trace MOVIE=tas BP=0x11594"
+	@echo "  make trace MOVIE=tas BP=0x11594 FRAMES=50 LOG=logs/boss_trace.csv"
+	@exit 1
+else ifndef BP
+	@echo "ERROR: BP (breakpoint) parameter required!"
+	@echo ""
+	@echo "Usage: make trace MOVIE=<type> BP=<hex_addr>"
+	@exit 1
+else
+	@echo "Tracing from breakpoint $(BP) for $(if $(FRAMES),$(FRAMES),20) frames..."
+	@if not exist logs mkdir logs
+	$(GENS_EXE) -rom $(ROM) -play $(MOVIE_FILE_$(MOVIE)) -turbo -nosound \
+		-trace-breakpoint $(BP) \
+		-trace-frames $(if $(FRAMES),$(FRAMES),20) \
+		-trace-log $(if $(LOG),$(LOG),logs/trace_$(BP).csv)
+endif
+
+# Binary trace CPU execution by frame range
+# Usage: make trace-frames MOVIE=<type> START=<frame> END=<frame> [LOG=<path>]
+# Example: make trace-frames MOVIE=tas START=10300 END=10320 LOG=logs/bug.btrc
+#
+# Output: Compact binary trace file (~10-50x smaller than text)
+# Post-process with:
+#   make trace-story LOG=logs/bug.btrc    - Human-readable story
+#   make trace-graph LOG=logs/bug.btrc    - Graphviz pointer/DMA visualization
+.PHONY: trace-frames
+trace-frames:
+ifndef MOVIE
+	@echo "ERROR: MOVIE parameter required!"
+	@echo ""
+	@echo "Usage: make trace-frames MOVIE=<type> START=<frame> END=<frame> [LOG=<path>]"
+	@echo ""
+	@echo "Parameters:"
+	@echo "  MOVIE   - Movie type: tas, longplay, or menus"
+	@echo "  START   - Start tracing at this frame"
+	@echo "  END     - Stop tracing at this frame"
+	@echo "  LOG     - Path to binary trace file (default: logs/trace_<START>_<END>.btrc)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make trace-frames MOVIE=tas START=10300 END=10320"
+	@echo "  make trace-frames MOVIE=tas START=10300 END=10320 LOG=logs/flying_neo.btrc"
+	@echo ""
+	@echo "Post-processing:"
+	@echo "  make trace-story LOG=logs/trace_10300_10320.btrc"
+	@echo "  make trace-graph LOG=logs/trace_10300_10320.btrc MODE=pointers"
+	@echo "  make trace-graph LOG=logs/trace_10300_10320.btrc MODE=dma"
+	@exit 1
+else ifndef START
+	@echo "ERROR: START parameter required!"
+	@exit 1
+else ifndef END
+	@echo "ERROR: END parameter required!"
+	@exit 1
+else
+	@echo "Binary tracing frames $(START) to $(END)..."
+	@python -c "import os; os.makedirs('logs', exist_ok=True)"
+	"$(GENS_EXE)" -rom $(ROM) -play $(MOVIE_FILE_$(MOVIE)) -turbo -nosound -frameskip 0 -bintrace $(if $(LOG),$(LOG),logs/trace_$(START)_$(END).btrc) -bintrace-start $(START) -bintrace-end $(END)
+	@echo ""
+	@echo "Binary trace saved to: $(if $(LOG),$(LOG),logs/trace_$(START)_$(END).btrc)"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  make trace-story LOG=$(if $(LOG),$(LOG),logs/trace_$(START)_$(END).btrc)"
+	@echo "  make trace-graph LOG=$(if $(LOG),$(LOG),logs/trace_$(START)_$(END).btrc) MODE=pointers"
+endif
+
+# Default symbol file
+SYMBOLS_FILE = logs/symbols.txt
+
+# Generate symbol file from assembly listing
+# Usage: make symbols [SYMBOLS=<output.txt>] [--all|--include-loc|--include-generic]
+.PHONY: symbols
+symbols: alien_soldier_j.lst
+	@python -c "import os; os.makedirs('logs', exist_ok=True)"
+	@echo "Extracting symbols from alien_soldier_j.lst..."
+	python $(SCRIPTS_DIR)/extract_symbols.py alien_soldier_j.lst \
+		--stats --rom-only -o $(if $(SYMBOLS),$(SYMBOLS),$(SYMBOLS_FILE))
+
+# Generate listing file (prerequisite for symbols)
+alien_soldier_j.lst: alien_soldier_j.s src/macros.inc src/ports.inc src/equals.inc src/ram_addrs.inc
+	@echo "Building listing file..."
+	$(AS_BIN) -L $(AS_ARGS) alien_soldier_j.s
+
+# Generate human-readable story log from binary trace
+# Usage: make trace-story LOG=<path.btrc> [OUT=<path.txt>] [SYMBOLS=<path.txt>]
+.PHONY: trace-story
+trace-story:
+ifndef LOG
+	@echo "ERROR: LOG parameter required!"
+	@echo ""
+	@echo "Usage: make trace-story LOG=<trace.btrc> [OUT=<story.txt>] [SYMBOLS=<file.txt>]"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make trace-story LOG=logs/trace_10300_10320.btrc"
+	@echo "  make trace-story LOG=logs/trace.btrc OUT=logs/story.txt"
+	@echo "  make trace-story LOG=logs/trace.btrc SYMBOLS=logs/symbols.txt"
+	@echo ""
+	@echo "Tip: Run 'make symbols' first to generate symbol file"
+	@exit 1
+else
+	@echo "Generating story log from $(LOG)..."
+	python $(SCRIPTS_DIR)/bintrace_parser.py $(LOG) \
+		--story $(if $(OUT),$(OUT),$(LOG:.btrc=_story.txt)) \
+		$(if $(SYMBOLS),--symbols $(SYMBOLS),$(if $(wildcard $(SYMBOLS_FILE)),--symbols $(SYMBOLS_FILE),))
+endif
+
+# Generate Graphviz visualizations from binary trace (all modes)
+# Usage: make trace-graph LOG=<path.btrc>
+.PHONY: trace-graph
+trace-graph:
+ifndef LOG
+	@echo "ERROR: LOG parameter required!"
+	@echo ""
+	@echo "Usage: make trace-graph LOG=<trace.btrc>"
+	@echo ""
+	@echo "Generates all graph types:"
+	@echo "  - pointers: pointer table relationships"
+	@echo "  - dma: DMA data flow (ROM -> VRAM)"
+	@echo "  - callers: which functions trigger DMA/reads"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make trace-graph LOG=logs/trace.btrc"
+	@exit 1
+else
+	@echo === Generating all graphs from $(LOG) ===
+	@echo.
+	@echo [1/3] Pointers graph...
+	@python $(SCRIPTS_DIR)/bintrace_parser.py $(LOG) \
+		--graphviz $(LOG:.btrc=_pointers.dot) --mode pointers \
+		$(if $(wildcard $(SYMBOLS_FILE)),--symbols $(SYMBOLS_FILE),)
+	@python -c "import subprocess; r = subprocess.run(['dot', '-Tpng', '$(LOG:.btrc=_pointers.dot)', '-o', '$(LOG:.btrc=_pointers.png)'], capture_output=True); print('  -> $(LOG:.btrc=_pointers.png)') if r.returncode == 0 else print('  -> $(LOG:.btrc=_pointers.dot) (no graphviz)')"
+	@echo.
+	@echo [2/3] DMA graph...
+	@python $(SCRIPTS_DIR)/bintrace_parser.py $(LOG) \
+		--graphviz $(LOG:.btrc=_dma.dot) --mode dma \
+		$(if $(wildcard $(SYMBOLS_FILE)),--symbols $(SYMBOLS_FILE),)
+	@python -c "import subprocess; r = subprocess.run(['dot', '-Tpng', '$(LOG:.btrc=_dma.dot)', '-o', '$(LOG:.btrc=_dma.png)'], capture_output=True); print('  -> $(LOG:.btrc=_dma.png)') if r.returncode == 0 else print('  -> $(LOG:.btrc=_dma.dot) (no graphviz)')"
+	@echo.
+	@echo [3/3] Callers graph...
+	@python $(SCRIPTS_DIR)/bintrace_parser.py $(LOG) \
+		--graphviz $(LOG:.btrc=_callers.dot) --mode callers \
+		$(if $(wildcard $(SYMBOLS_FILE)),--symbols $(SYMBOLS_FILE),)
+	@python -c "import subprocess; r = subprocess.run(['dot', '-Tpng', '$(LOG:.btrc=_callers.dot)', '-o', '$(LOG:.btrc=_callers.png)'], capture_output=True); print('  -> $(LOG:.btrc=_callers.png)') if r.returncode == 0 else print('  -> $(LOG:.btrc=_callers.dot) (no graphviz)')"
+	@echo.
+	@echo Done! Generated graphs in $(dir $(LOG))
+endif
+
+# Print binary trace statistics
+# Usage: make trace-stats LOG=<path.btrc>
+.PHONY: trace-stats
+trace-stats:
+ifndef LOG
+	@echo "ERROR: LOG parameter required!"
+	@echo ""
+	@echo "Usage: make trace-stats LOG=<trace.btrc>"
+	@exit 1
+else
+	python $(SCRIPTS_DIR)/bintrace_parser.py $(LOG) --stats
+endif
+
+# Compare two trace logs
+# Usage: make compare-traces T1=trace1.csv T2=trace2.csv
+.PHONY: compare-traces
+compare-traces:
+ifndef T1
+	@echo "ERROR: T1 (first trace) parameter required!"
+	@echo ""
+	@echo "Usage: make compare-traces T1=<path> T2=<path> [EXEC_ONLY=1]"
+	@exit 1
+else ifndef T2
+	@echo "ERROR: T2 (second trace) parameter required!"
+	@exit 1
+else
+	python $(SCRIPTS_DIR)/compare_traces.py $(T1) $(T2) $(if $(EXEC_ONLY),--exec-only,)
+endif
 
 # Help
 .PHONY: help
@@ -352,10 +596,30 @@ help:
 	@echo "  4. make build && make compare"
 	@echo "  5. git commit"
 	@echo ""
-	@echo "Memory-level debugging:"
+	@echo "Debugging (visual + memory):"
 	@echo "  1. make reference MOVIE=tas    - Generate reference"
 	@echo "  2. [modify ROM and rebuild]"
-	@echo "  3. make debug MOVIE=tas        - Detect first memory difference"
+	@echo "  3. make debug MOVIE=tas        - Collect 10 visual differences"
+	@echo ""
+	@echo "Debugging (pointer issues):"
+	@echo "  make reference MOVIE=tas       - Generate reference (required first!)"
+	@echo "  make debug-pointers MOVIE=tas [START=1BD000] [END=100000]"
+	@echo "     -> Tests data blocks by inserting padding ($(ANALYSIS_WORKERS) parallel workers)"
+	@echo "     -> Works backwards from END to minimize displacement"
+	@echo "     -> Collects 10 genstate dumps + screenshots when diff found"
+	@echo "     -> Stops after first problem found"
+	@echo ""
+	@echo "CPU tracing (binary format, ~10-50x smaller than text):"
+	@echo "  make trace-frames MOVIE=tas START=100 END=110"
+	@echo "     -> Outputs compact binary trace: logs/trace_100_110.btrc"
+	@echo "  make trace-story LOG=logs/trace_100_110.btrc"
+	@echo "     -> Human-readable story log: logs/trace_100_110_story.txt"
+	@echo "  make trace-graph LOG=logs/trace_100_110.btrc MODE=pointers"
+	@echo "     -> Graphviz DOT: logs/trace_100_110_pointers.dot"
+	@echo "  make trace-graph LOG=logs/trace_100_110.btrc MODE=dma"
+	@echo "     -> Graphviz DOT: logs/trace_100_110_dma.dot"
+	@echo "  make trace-stats LOG=logs/trace_100_110.btrc"
+	@echo "     -> Print trace statistics"
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make show-movie         - Show current movie setting"

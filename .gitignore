@@ -158,12 +158,13 @@ temp.asm
 *.til
 
 # Gens emulator and analysis
-gens-rerecording/
+gens_automation/
 Gens.cfg
 language.dat
 test_screenshots/
 reference/
 diffs/
+logs/
 analysis_report*
 unnamed_procedures.txt
 tmp/

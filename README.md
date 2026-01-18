@@ -10,131 +10,267 @@ Alien Soldier (J) source code disassembly project. The source assembles with the
 
 ```
 alien_soldier_src/
-├── bin/                    # Assembler tools (AS, p2bin, msg files)
-├── data/                   # Extracted tile data from original ROM
-│   ├── tiles_*.bin        # Decompressed tile graphics
-│   └── tiles_addrs.txt    # Addresses of compressed tiles in ROM
-├── scripts/                # Build and extraction scripts
-│   ├── build.py           # Main build script (configurable via CLI args)
-│   ├── clean.py           # Cross-platform file cleanup utility
-│   └── split.py           # ROM data extraction and tile decompressor
-├── src/                    # Include files
-│   ├── equals.inc         # Constants and equates
-│   ├── ports.inc          # Hardware I/O port definitions
-│   └── ram_addrs.inc      # RAM address definitions (~1014 lines)
-├── alien_soldier_j.s       # Main disassembled source (11 MB, ~157k lines)
-├── database.idb            # IDA Pro database
-├── Makefile                # Build system
-└── README.md               # Project documentation
+├── bin/                           # Assembler tools
+│   ├── asw.exe                   # AS Macro Assembler 1.42 Beta
+│   ├── p2bin.exe                 # Object to binary converter
+│   └── *.msg                     # Assembler message catalogs
+├── data/                          # Extracted tile data from original ROM
+│   ├── tiles_*.bin               # Decompressed tile graphics (~120 files)
+│   └── tiles_addrs.txt           # Addresses of compressed tiles in ROM
+├── scripts/                       # Python tooling (see Scripts section)
+├── src/                           # Include files
+│   ├── equals.inc                # Constants and equates
+│   ├── macros.inc                # Assembler macros
+│   ├── ports.inc                 # Hardware I/O port definitions
+│   └── ram_addrs.inc             # RAM address definitions (~1014 lines)
+├── logs/                          # Trace and analysis output
+├── movies/                        # TAS movie files for automated testing
+│   ├── dammit,truncated-aliensoldier.gmv  # TAS speedrun
+│   ├── alien_soldier_j_longplay.gmv       # Full playthrough
+│   └── alien_soldier_j_menus.gmv          # Menu navigation
+├── workflow/                      # Documentation workflow state
+├── gens_automation/               # Modified Gens emulator (auto-cloned)
+├── alien_soldier_j.s              # Main disassembled source (~120k lines)
+├── alien_soldier_j.bin            # Original ROM for comparison
+├── Makefile                       # Build and automation system
+└── README.md
+```
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `build_rom.py` | Orchestrates ROM assembly (AS → p2bin) |
+| `clean_project.py` | Cross-platform cleanup of build artifacts |
+| `compare_roms.py` | Binary comparison of built vs original ROM |
+| `split_data_from_rom.py` | Extracts and decompresses tile data from ROM |
+| `split_data_from_listing.py` | Extracts data sections from AS listing |
+| `bintrace_parser.py` | Parses binary traces, generates Graphviz/story logs |
+| `extract_symbols.py` | Extracts ~7000 symbols from AS listing file |
+| `find_unnamed_procedures.py` | Lists procedures still named `sub_*`, `loc_*` |
+| `find_unreferenced_labels.py` | Finds labels with no references (dead code) |
+| `prepare_batch.py` | Prepares batch of procedures for documentation |
+| `rename_procedures.py` | Applies rename CSV to source file |
+| `analyze_procedures.py` | Automated procedure analysis with emulator |
+| `generate_analysis_report.py` | Generates HTML report from analysis data |
+| `debug_pointers.py` | Binary search for pointer issues (24 parallel workers) |
+| `report_pointers.py` | Generates report from pointer debugging session |
+| `compare_states.py` | Compares emulator state dumps (RAM, VRAM, registers) |
+| `compare_traces.py` | Compares two CPU traces for divergence |
+| `convert_tiles.py` | Converts tile data to PNG images |
+| `validate_movie_descriptions.py` | Validates TAS movie file integrity |
+
+## Makefile Workflows
+
+### Build Workflow
+```bash
+make build              # Assemble source → asbuilt.bin (2MB)
+make compare            # Compare asbuilt.bin with original ROM
+make clean              # Remove all build artifacts
+make symbols            # Extract symbols from listing file
+make build-gens         # Build modified Gens emulator (requires VS2022)
+```
+
+### Documentation Workflow
+Semi-automated procedure naming with Claude AI assistance:
+```bash
+# 1. Set movie type for the session
+make set-movie MOVIE=tas
+
+# 2. Prepare batch of unnamed procedures
+make prepare-batch COUNT=40
+# → Creates workflow/batch_procedures.txt with context
+
+# 3. [Claude reads batch, creates workflow/rename_batch.csv]
+
+# 4. Apply renames to source
+make rename
+
+# 5. Verify changes
+make build && make compare
+
+# 6. Commit changes
+git commit -am "Document N procedures"
+```
+
+### Analysis Workflow
+Automated procedure analysis using emulator screenshots:
+```bash
+# 1. Generate reference screenshots (required once)
+make reference MOVIE=tas
+
+# 2. Find procedures that need analysis
+make find-unanalyzed
+
+# 3. Run automated analysis
+make analyze MOVIE=tas
+
+# 4. Generate HTML report
+make report MOVIE=tas
+```
+
+### Debugging Workflow (Visual)
+Find which code change breaks the game:
+```bash
+# 1. Generate reference screenshots
+make reference MOVIE=tas
+
+# 2. Modify ROM and rebuild
+make build
+
+# 3. Run visual comparison (collects 10 differences)
+make debug MOVIE=tas
+```
+
+### Debugging Workflow (Pointer Issues)
+Binary search for problematic ROM regions:
+```bash
+# 1. Generate reference (required)
+make reference MOVIE=tas
+
+# 2. Run pointer debugger (24 parallel workers)
+make debug-pointers MOVIE=tas START=1BD000 END=100000
+# → Tests by inserting padding at different addresses
+# → Works backwards from END to minimize displacement
+# → Stops when first visual difference found
+# → Saves state dumps and screenshots for analysis
+```
+
+### CPU Tracing Workflow
+Detailed execution analysis with binary traces:
+```bash
+# 1. Capture trace for frame range
+make trace-frames MOVIE=tas START=10500 END=10600
+# → Creates logs/trace_10500_10600.btrc (~8MB for 100 frames)
+
+# 2. Generate human-readable story log
+make trace-story LOG=logs/trace_10500_10600.btrc
+# → Shows: [Function+$offset] Read/Write/DMA operations
+
+# 3. Generate Graphviz diagrams
+make trace-graph LOG=logs/trace_10500_10600.btrc
+# → Creates 3 DOT files + PNG: pointers, dma, callers
+
+# 4. View statistics
+make trace-stats LOG=logs/trace_10500_10600.btrc
+```
+
+### Utility Commands
+```bash
+make help               # Show all available targets
+make show-movie         # Display current movie setting
+make stop               # Kill all running Gens emulator instances
 ```
 
 ## Build System
 
-### Building
-```bash
-make build      # Assemble and build ROM
-make clean      # Remove build artifacts
-make split      # Extract data from original ROM (requires alien_soldier_j.bin)
-make help       # Show all available targets
-```
-
 ### Build Process
-1. **scripts/build.py** - Python build script that orchestrates the build
+1. **scripts/build_rom.py** - Python build script that orchestrates the build
 2. **asw.exe** - Macro Assembler (AS 1.42 Beta) assembles alien_soldier_j.s → alien_soldier_j.p
 3. **p2bin.exe** - Converts .p object file → asbuilt.bin (2 MB)
 
-The build script runs the assembler from the bin/ directory where the required .msg files are located.
-
-### Advanced Usage
-
-Both scripts support command-line arguments for customization:
-
-**Build script:**
-```bash
-python scripts/build.py --help
-python scripts/build.py --source alien_soldier_j.s --output myrom.bin
-```
-
-**ROM data extractor:**
-```bash
-python scripts/split.py --help
-python scripts/split.py -f alien_soldier_j.bin -o output_dir -a data/tiles_addrs.txt
-```
-
 ### Build Status
-- Build succeeds with 1 warning at line 79003
-- Warning: `btst #$B,$E(a4)` - bit number will be truncated (bit 11 > 7 for byte operation)
+- ✅ Build succeeds with byte-accurate ROM output (no warnings)
+- ✅ Checksum validation disabled in source (original ROM had incorrect checksum)
+- 📁 `alien_soldier_j.bin` is the reference ROM with these fixes applied
 
-## Code Analysis
+## Binary Trace System
 
-### Sprite Mapping Data Structure
+A custom binary tracing system was added to the Gens-automation emulator for debugging ROM issues.
 
-The game uses a complex sprite mapping system found around $E8000-$E9000 in ROM.
+### Trace Features
+- **Compact binary format**: ~20 bytes per event vs ~250 bytes text
+- **Memory aggregation**: Sequential reads/writes merged into blocks
+- **DMA tracking**: Captures all DMA transfers with source/destination
+- **Pointer detection**: Heuristic flagging of pointer table loads
+- **Symbol support**: Shows function names like `Reset+$4` instead of `$000204`
+- **Graphviz output**: Visual diagrams of data flow and pointer tables
 
-#### Structure Format (per sprite frame)
-```asm
-dc.w $8XX               ; Sprite count + flags (bit 15 = end marker)
-dc.l <longword_data>    ; 32-bit data (see below)
-dc.w <Y_offset>         ; Y position offset
-dc.w $8XX               ; Next sprite data...
-```
+### Trace Event Types
+| Type | Description |
+|------|-------------|
+| FRAME | Frame boundary marker |
+| READ/WRITE | Memory access (1/2/4 bytes) |
+| READ_BLOCK/WRITE_BLOCK | Aggregated sequential accesses |
+| VRAM_W/VRAM_R | Video RAM access |
+| CRAM_W | Color RAM (palette) access |
+| VSRAM_W | Vertical scroll RAM access |
+| DMA | DMA transfer (source, dest, length, type) |
 
-#### The 32-bit Longword Mystery
+### Output Formats
+- **Story log**: Human-readable event log with symbols
+- **Pointers graph**: Shows pointer table → target relationships
+- **DMA graph**: Shows ROM/RAM → VRAM data flow
+- **Callers graph**: Shows which functions trigger DMA transfers
 
-IDA disassembled these as: `dc.l byte_FXXXX+$Y000000` where:
-- `byte_FXXXX` - Points to tile data (address ~$F0000-$F5000)
-- `+$Y000000` - Large offset ($1000000 to $E000000)
+## Code Documentation Progress
 
-**Example from alien_soldier_j.s:124973:**
-```asm
-dc.l byte_F2F5A+$E000000    ; IDA representation
-```
+### Documented Functions (~200+ labels renamed)
+- **System**: `Sys_VBlankHandler`, `Sys_MainGameLoop`, `Sys_InitGameMode`
+- **Graphics**: `Gfx_VBlankDMATransfer`, `Gfx_FadePaletteTransition`, `Gfx_InitVideoMode`
+- **Sprites**: `Sprite_ProcessDMAQueue`, `Sprite_PrepareOAM`, `Sprite_CalculatePosition`
+- **Animation**: `Anim_UpdateFrame`, `Anim_AdvanceFrameOffset`
+- **Input**: `Input_ReadController`, `Input_ProcessButtons`
+- **Sound**: `Sound_UpdateDriver`, `Sound_WriteYM2612`, `Sound_KeyOffAllChannels`
+- **Bosses**: `Boss_*` prefixed labels for boss state machines
+- **Enemies**: `Enemy_*` prefixed labels
+- **UI**: `UI_InitializeSEGAScreen`, `UI_HandlePasswordInput`
+- **Stages**: `Stage_*` prefixed labels for level-specific code
 
-**Actual ROM data:**
-```
-Address $E86FA: 0x0E0F2F5A  ; byte_F2F5A ($000F2F5A) + $E000000 = $0E0F2F5A
-```
+### RAM Addresses Documented
+- ~1014 RAM addresses defined in `src/ram_addrs.inc`
+- Includes sprite tables, DMA queues, game state, player data
 
-**Analysis:**
-- The assembler correctly calculates: $000F2F5A + $0E000000 = $0E0F2F5A
-- These values are NOT ROM addresses (would exceed 4MB limit = $3FFFFF)
-- Likely purpose:
-  - Tile pattern numbers with extended attributes
-  - VDP VRAM addresses
-  - Engine-specific data format
-  - Upper bits may encode palette, priority, flip flags
+## Known Issues
 
-#### Code Usage (sub_174A8)
-The sprite data is processed by copying longwords directly:
-```asm
-move.l  (a1)+,(a3)+    ; Copy 32-bit value as-is to sprite buffer
-```
+### $E8000-$121932 Graphics Corruption
 
-This confirms these are raw data values, not pointers to be dereferenced.
+**Problem**: Adding padding after `org $E8000` causes graphics corruption around frame 10500 in TAS playback.
 
-### Known Issues
+**Root Cause Analysis** (via binary tracing):
 
-#### 1. Broken Code Regions (when moving code)
-- **$3C000-$40000**: Gusthead boss is broken
-- **$50000-$58000**: Wolfgunblood Garopa boss is broken
-- **$82324-$E8000**: PCM sounds are broken
-- **$E8000-$121932**: Graphics in levels are broken
+1. **Pointer Storage in RAM**: The game stores ROM pointers in entity structures at runtime
+   - Example: `dword_FFA408` stores pointer to sprite animation data
+   - Code writes `move.l #word_E86AA,8(a5)` during entity initialization
 
-These suggest the code has hardcoded addresses that need relocation when code is moved.
+2. **Data Shift Effect**: When padding is added after `org $E8000`:
+   - All labels after the padding shift by the padding size (e.g., 32 bytes)
+   - Assembler correctly updates all code references to use new addresses
+   - **BUT**: Pointers already stored in RAM from earlier frames are now stale
 
-#### 2. IDA Quirks
-- Line 79003: `btst #$B,$E(a4)` - bit 11 used for byte operation
-- Sprite mappings represented as base+offset instead of raw values
-- ~277 instances of `+$X000000` patterns in sprite data
+3. **Trace Evidence** (frame 10500):
+   ```
+   Broken ROM: $FFA408 = $000E86CA  (shifted address)
+   Working ROM: $FFA408 = $000E86AA  (original address)
+   Difference: 0x20 = 32 bytes (padding size)
+   ```
+
+4. **DMA Transfer Mismatch**:
+   ```
+   Broken:  DMA $0F7EE0 -> VRAM (shifted source)
+   Working: DMA $0F7EC0 -> VRAM (correct source)
+   ```
+
+**Why This Happens**:
+- Entity pointers are written to RAM during level/boss initialization (before frame 10500)
+- The TAS movie was recorded with the original ROM layout
+- When ROM changes, game state diverges, but old pointers remain in RAM
+- Result: DMA reads from wrong ROM addresses → corrupted graphics
+
+**Potential Solutions** (not implemented):
+1. Find all pointer table initializations and verify they use labels (not hardcoded)
+2. Check for any tables in ROM that contain absolute addresses to data after $E8000
+3. Ensure no code caches ROM addresses in RAM across level transitions
+4. The issue may be inherent to how the game's entity system works
 
 ## Tile Compression
 
 The game uses a custom LZSS-based compression algorithm for tile graphics.
 
-### Decompression Algorithm (scripts/split.py)
+### Decompression Algorithm
 
 Format:
-- **Header**: 16-bit size
+- **Header**: 16-bit decompressed size
 - **Data**: Variable length compressed stream
 
 Compression modes (determined by control byte):
@@ -144,52 +280,65 @@ Bit 7 = 1: LZSS backreference
   - Bits 1-0 + next byte: Window offset (0-1023) + 1
 
 Bit 7 = 0:
-  Bit 6 = 1, Bit 5 = 1: RLE pairs
-    - Bits 4-0: Count + 1
-    - Next byte: Value1
-    - Following bytes: alternating Value1, Value2
-
+  Bit 6 = 1, Bit 5 = 1: RLE pairs (alternating)
   Bit 6 = 1, Bit 5 = 0: RLE pairs (2-byte pattern)
-    - Bits 4-0: Count + 1
-    - Next 2 bytes: Pattern to repeat
-
   Bit 6 = 0, Bit 5 = 1: RLE single byte
-    - Bits 4-0: Count + 1
-    - Next byte: Value to repeat
-
   Bit 6 = 0, Bit 5 = 0: Literal data
-    - Bits 4-0: Count (direct copy)
-    - Next N bytes: Raw data
 ```
 
 ### Tile Data
 - Located in `data/` directory
 - ~120+ compressed tile sets extracted
 - File naming: `tiles_<ROM_ADDR>.bin`
-- Addresses listed in `data/tiles_addrs.txt`
 
-## TODO
+## Sprite Mapping Data Structure
 
-1. Fix several bugs when moving code:
-   - $3C000-$40000 - Gusthead is broken
-   - $50000-$58000 - Wolfgunblood Garopa is broken
-   - $82324-$E8000 - PCM sounds are broken
-   - $E8000-$121932 - graphics in levels are broken
+The game uses a complex sprite mapping system found around $E8000-$E9000 in ROM.
 
-2. Create compressor for tiles (based on LZSS)
-3. Map data structures
-4. Decompose data to separate files
-5. Create data folder for mappings
-6. Fix btst warning at line 79003
-7. Test ROM in emulator
-8. Compare with original ROM for byte-accurate verification
+### Structure Format (per sprite frame)
+```asm
+dc.w $8XX               ; Sprite count + flags (bit 15 = end marker)
+dc.l <longword_data>    ; 32-bit data (tile + attributes)
+dc.w <Y_offset>         ; Y position offset
+dc.w $8XX               ; Next sprite data...
+```
 
-## Next Steps
+### The 32-bit Longword Format
+IDA disassembled these as: `dc.l byte_FXXXX+$Y000000` where:
+- `byte_FXXXX` - Points to tile data (address ~$F0000-$F5000)
+- `+$Y000000` - Large offset encoding attributes
 
-1. **Understand sprite data format** - Need to determine what the 32-bit values represent
-2. **Fix hardcoded addresses** - Identify and fix relocations in broken code regions
-3. **Improve code structure** - Separate data into proper structures
-4. **Create mapping tables** - Document sprite mappings, tile mappings, boss data
-5. **Create tile compressor** - Implement the reverse of the decompression algorithm in split.py
-6. **Test ROM** - Verify assembled ROM works in emulator
-7. **Compare with original** - Get original ROM for byte-accurate comparison
+These values are NOT ROM addresses but VDP tile indices with extended attributes (palette, priority, flip flags).
+
+## Project Status
+
+### Completed
+- [x] Byte-accurate ROM assembly
+- [x] Basic code documentation (~200+ functions labeled)
+- [x] RAM address definitions (~1014 addresses)
+- [x] Tile decompression algorithm documented
+- [x] Binary trace system for debugging
+- [x] Symbol extraction from assembler output
+- [x] Documentation workflow with batch processing
+- [x] Visual debugging with parallel workers
+- [x] Pointer issue debugging tools
+
+### Future Work
+- [ ] Fix $E8000-$121932 pointer caching issue
+- [ ] Create tile compressor (reverse of decompressor)
+- [ ] Complete entity system documentation
+- [ ] Document all jump tables and pointer tables
+- [ ] Separate data into structured include files
+- [ ] Full gameplay testing beyond TAS verification
+
+## Credits
+
+- Disassembly work using IDA Pro
+- AS Macro Assembler by Alfred Arnold
+- Gens-automation emulator (https://github.com/oranguthang/gens_automation)
+- Inspired by lab313ru's Quackshot disassembly
+- Original game by Treasure (1995)
+
+## License
+
+This is a work of reverse engineering for educational and preservation purposes. The original game is copyright Treasure and Sega.
