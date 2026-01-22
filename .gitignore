@@ -136,20 +136,17 @@ tmpclaude*
 # Links to utils
 *.lnk
 
-alien_soldier_j_*.bin
-alien_soldier_j.bin
+# ROMs and extracted data
+*.bin
+
+# IDA database
+*.idb
+
+# Legacy patterns (kept for reference)
 alien_soldier_j.asm
 alien_soldier_j.map
 alien_soldier_j.lst
 alien_soldier_j.p
-database.bin
-database.asm
-database.map
-database.lst
-database.p
-asbuilt.bin
-rom.bin
-temp.asm
 
 # IDA files
 *.id0
@@ -177,6 +174,3 @@ analysis_results.csv
 batch_extract.txt
 batch_analysis.csv
 batch_renames.csv
-
-# Uncompressed tile data (for reference only)
-data/uncompressed/

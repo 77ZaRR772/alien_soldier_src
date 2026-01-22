@@ -13,7 +13,8 @@ export AS_MSGPATH = bin
 SRC = alien_soldier_j.s
 OBJ = alien_soldier_j.p
 ROM = asbuilt.bin
-ORIG_ROM = alien_soldier_j.bin
+ORIG_ROM = Alien Soldier (J) [!].bin
+REF_ROM = alien_soldier_j.bin
 
 # Directories
 DATA_DIR = data
@@ -21,12 +22,27 @@ SRC_DIR = src
 SCRIPTS_DIR = scripts
 BIN_DIR = bin
 
-# Tile addresses file
-TILES_ADDRS = $(DATA_DIR)/tiles_addrs.txt
+# Data addresses file (for binclude segments)
+DATA_ADDRS = $(DATA_DIR)/data_addrs.txt
 
 # Default target
 .PHONY: all
 all: build
+
+# Initialize project from original ROM
+# Usage: make init
+.PHONY: init
+init:
+	@python $(SCRIPTS_DIR)/init_project.py \
+		--orig-rom "$(ORIG_ROM)" \
+		--ref-rom "$(REF_ROM)" \
+		--data-dir $(DATA_DIR) \
+		--data-addrs $(DATA_ADDRS) \
+		--source $(SRC) \
+		--output $(ROM) \
+		--as-bin $(AS_BIN) \
+		--p2bin $(P2BIN) \
+		--as-args "$(AS_ARGS)"
 
 # Build ROM from assembly source
 .PHONY: build
@@ -44,13 +60,18 @@ build:
 # Split original ROM into data files
 .PHONY: split
 split:
-	@echo "Splitting ROM data..."
 	@python $(SCRIPTS_DIR)/split_data_from_rom.py \
-		--rom-file $(ORIG_ROM) \
+		--rom-file "$(ORIG_ROM)" \
 		--output $(DATA_DIR) \
-		--addrs $(TILES_ADDRS)
-	@echo ""
-	@echo "Split complete!"
+		--addrs $(DATA_ADDRS)
+
+# Unpack LZSS-compressed data from ROM to data/uncompressed/
+# Attempts to decompress all entries from data/data_addrs.txt
+# Decompress LZSS data in all data subdirectories
+# Creates uncompressed/ subfolder where decompression succeeds
+.PHONY: unpack-data
+unpack-data:
+	@python $(SCRIPTS_DIR)/unpack_data.py --data-dir $(DATA_DIR)
 
 # Clean build artifacts and temp files
 .PHONY: clean
@@ -174,12 +195,12 @@ else
 	@echo "Report saved: $(WORKFLOW_DIR)/analysis_report_$(MOVIE).txt / .csv"
 endif
 
-# Compare built ROM with original
+# Compare built ROM with reference
 .PHONY: compare
 compare:
 	@python $(SCRIPTS_DIR)/compare_roms.py \
 		--built $(ROM) \
-		--original $(ORIG_ROM) \
+		--original $(REF_ROM) \
 		--project-dir .
 
 # ============================================================================

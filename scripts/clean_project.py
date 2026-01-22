@@ -12,7 +12,14 @@ import glob
 
 # Files/folders in project root
 ROOT_TARGETS = [
+    # Data subdirectories (created by make split)
+    'data/artcomp',
+    'data/artunc',
+    'data/mappings',
+    'data/sound',
+    'data/other',
     'data/uncompressed',
+    # Build artifacts
     'language.dat',
     'Gens.cfg',
     'alien_soldier_j.p',

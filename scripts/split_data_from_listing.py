@@ -110,15 +110,21 @@ def parse_dc_line(line):
     return bytes(result) if result else None
 
 
-def split_data_blocks(lines, min_size=1024):
+def split_data_blocks(lines, min_size=1024, label_filter=None):
     """
     Find and extract data blocks.
     Returns list of blocks with binary data.
     """
-    print(f"Scanning for data blocks (min {min_size} bytes)...")
+    filter_info = f", filter: {label_filter}" if label_filter else ""
+    print(f"Scanning for data blocks (min {min_size} bytes{filter_info})...")
 
-    label_pattern = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*):')
-    dc_pattern = re.compile(r'^\s*dc\.[bwl]\s+', re.IGNORECASE)
+    label_re = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*):')
+    dc_re = re.compile(r'^\s*dc\.[bwl]\s+', re.IGNORECASE)
+
+    def matches_filter(label):
+        if label_filter is None:
+            return True
+        return re.match(label_filter, label) is not None
 
     blocks = []
     current_block = None
@@ -129,10 +135,10 @@ def split_data_blocks(lines, min_size=1024):
             continue
 
         # Check for label
-        label_match = label_pattern.match(line)
+        label_match = label_re.match(line)
         if label_match:
-            # Finalize previous block if large enough
-            if current_block and len(current_block['data']) >= min_size:
+            # Finalize previous block if large enough and matches filter
+            if current_block and len(current_block['data']) >= min_size and matches_filter(current_block['label']):
                 blocks.append(current_block)
                 print(f"  [{len(blocks)}] {current_block['label']}: {len(current_block['data'])} bytes "
                       f"(lines {current_block['start_line']}-{current_block['end_line']})")
@@ -142,7 +148,7 @@ def split_data_blocks(lines, min_size=1024):
             rest = line[len(label) + 1:].strip()
 
             # Check if label line has dc data
-            if rest and dc_pattern.match(rest):
+            if rest and dc_re.match(rest):
                 data = parse_dc_line(rest)
                 if data:
                     current_block = {
@@ -158,28 +164,28 @@ def split_data_blocks(lines, min_size=1024):
             continue
 
         # Check for dc line
-        if current_block and dc_pattern.match(line):
+        if current_block and dc_re.match(line):
             data = parse_dc_line(line)
             if data:
                 current_block['data'].extend(data)
                 current_block['end_line'] = line_num
             else:
                 # Label reference - finalize block
-                if len(current_block['data']) >= min_size:
+                if len(current_block['data']) >= min_size and matches_filter(current_block['label']):
                     blocks.append(current_block)
                     print(f"  [{len(blocks)}] {current_block['label']}: {len(current_block['data'])} bytes "
                           f"(lines {current_block['start_line']}-{current_block['end_line']})")
                 current_block = None
         elif current_block:
             # Non-dc line - finalize block
-            if len(current_block['data']) >= min_size:
+            if len(current_block['data']) >= min_size and matches_filter(current_block['label']):
                 blocks.append(current_block)
                 print(f"  [{len(blocks)}] {current_block['label']}: {len(current_block['data'])} bytes "
                       f"(lines {current_block['start_line']}-{current_block['end_line']})")
             current_block = None
 
     # Finalize last block
-    if current_block and len(current_block['data']) >= min_size:
+    if current_block and len(current_block['data']) >= min_size and matches_filter(current_block['label']):
         blocks.append(current_block)
         print(f"  [{len(blocks)}] {current_block['label']}: {len(current_block['data'])} bytes "
               f"(lines {current_block['start_line']}-{current_block['end_line']})")
@@ -187,12 +193,16 @@ def split_data_blocks(lines, min_size=1024):
     return blocks
 
 
-def save_binary_files(blocks, data_dir):
+def save_binary_files(blocks, data_dir, prefix=''):
     """Save binary data to files."""
     data_dir.mkdir(exist_ok=True)
 
     for block in blocks:
-        filename = f"data_{block['label']}.bin"
+        # Don't add prefix if label already starts with tiles_ or sprite_
+        if block['label'].startswith(('tiles_', 'sprite_')):
+            filename = f"{block['label']}.bin"
+        else:
+            filename = f"{prefix}{block['label']}.bin" if prefix else f"{block['label']}.bin"
         filepath = data_dir / filename
 
         with open(filepath, 'wb') as f:
@@ -252,6 +262,8 @@ def main():
                        help='Project directory')
     parser.add_argument('--dry-run', action='store_true',
                        help='Preview without making changes')
+    parser.add_argument('--label-filter', default=None,
+                       help='Regex pattern to filter labels (e.g., "sprite_F.*")')
 
     args = parser.parse_args()
 
@@ -271,7 +283,7 @@ def main():
     print(f"Source: {len(lines):,} lines\n")
 
     # Find and parse data blocks
-    blocks = split_data_blocks(lines, args.min_size)
+    blocks = split_data_blocks(lines, args.min_size, args.label_filter)
 
     if not blocks:
         print("\nNo data blocks found")
