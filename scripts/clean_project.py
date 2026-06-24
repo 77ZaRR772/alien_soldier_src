@@ -83,7 +83,12 @@ def main():
     if removed == 0:
         print("  Nothing to clean")
     else:
-        print(f"\nRemoved {removed} item(s)")
+        print(f"\n Removed {removed} item(s)")
+        print("")
+        print(" NOTE: data/ subdirectories were removed.")
+        print(" Before the next 'make build', run:")
+        print("   make init")
+        print(" to re-extract data from the original ROM.")
 
 
 if __name__ == '__main__':
