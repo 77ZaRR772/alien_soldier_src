@@ -1,7 +1,42 @@
 import os
 import sys
+import platform
 import argparse
 import subprocess
+
+
+def detect_platform():
+    """Auto-detect host OS/arch and return matching bin/ subfolder.
+    Mirrors the logic from Makefile.
+    """
+    system = platform.system()
+    machine = platform.machine()
+
+    if system == "Windows":
+        return "windows_i386"
+    elif system == "Darwin":
+        return f"macos_{machine}"
+    else:
+        # Linux and other POSIX
+        return f"linux_{machine}"
+
+
+def get_default_tools():
+    """Return default (as_bin, p2bin) paths based on detected platform."""
+    plat = detect_platform()
+    system = platform.system()
+
+    if system == "Windows":
+        as_exe = "asw.exe"
+        p2bin_exe = "p2bin.exe"
+    else:
+        # Linux / macOS: no .exe, and AS is called 'asl'
+        as_exe = "asl"
+        p2bin_exe = "p2bin"
+
+    as_bin = os.path.join("bin", plat, as_exe)
+    p2bin = os.path.join("bin", plat, p2bin_exe)
+    return as_bin, p2bin
 
 
 def run_process(cmd):
@@ -12,8 +47,6 @@ def run_process(cmd):
 
 def assemble_main_src(base_dir, src_file, output_file, as_bin, p2bin, as_args):
     """Assemble source file and convert to binary ROM"""
-    os.chdir(base_dir)
-
     # Get absolute paths before changing directory
     src_abs = os.path.abspath(src_file)
     output_abs = os.path.abspath(output_file)
@@ -23,10 +56,6 @@ def assemble_main_src(base_dir, src_file, output_file, as_bin, p2bin, as_args):
     # Get bin directory
     bin_dir = os.path.dirname(as_bin_abs)
 
-    # Run assembler from bin directory (where .msg files are located)
-    original_dir = os.getcwd()
-    os.chdir(bin_dir)
-
     # Calculate relative path from bin to source
     src_rel = os.path.relpath(src_abs, os.getcwd())
 
@@ -34,9 +63,6 @@ def assemble_main_src(base_dir, src_file, output_file, as_bin, p2bin, as_args):
     asm_cmd = f'"{as_bin_abs}" {as_args} "{src_rel}"'
     print(f'Assembling: {asm_cmd}')
     ret = run_process(asm_cmd)
-
-    # Return to original directory
-    os.chdir(original_dir)
 
     if ret != 0:
         print(f'Assembly failed with code {ret}')
@@ -62,18 +88,21 @@ def assemble_main_src(base_dir, src_file, output_file, as_bin, p2bin, as_args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Build Alien Soldier ROM from assembly source')
+    default_as_bin, default_p2bin = get_default_tools()
+
+    parser = argparse.ArgumentParser(
+        description='Build Alien Soldier ROM from assembly source'
+    )
     parser.add_argument('-s', '--source', default='alien_soldier_j.s',
                         help='Source assembly file (default: alien_soldier_j.s)')
     parser.add_argument('-o', '--output', default='asbuilt.bin',
                         help='Output ROM file (default: asbuilt.bin)')
-    parser.add_argument('--as-bin', default='bin/windows_i386/asw.exe',
-                        help='Path to AS assembler (default: bin/windows_i386/asw.exe)')
-    parser.add_argument('--p2bin', default='bin/windows_i386/p2bin.exe',
-                        help='Path to p2bin converter (default: bin/windows_i386/p2bin.exe)')
+    parser.add_argument('--as-bin', default=default_as_bin,
+                        help=f'Path to AS assembler (default: {default_as_bin})')
+    parser.add_argument('--p2bin', default=default_p2bin,
+                        help=f'Path to p2bin converter (default: {default_p2bin})')
     parser.add_argument('--as-args', default='-maxerrors 2',
                         help='Arguments for AS assembler (default: -maxerrors 2)')
-
     args = parser.parse_args()
 
     basedir = os.getcwd()
