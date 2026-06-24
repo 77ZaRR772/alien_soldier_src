@@ -1,0 +1,25 @@
+# Normalize line endings: store LF in the repo and check out LF everywhere,
+# so editors that save CRLF on Windows no longer produce whole-file diffs.
+* text=auto eol=lf
+
+# Text sources (explicit for clarity; covered by the rule above)
+*.s        text eol=lf
+*.inc      text eol=lf
+*.py       text eol=lf
+*.md       text eol=lf
+*.txt      text eol=lf
+*.json     text eol=lf
+*.dot      text eol=lf
+Makefile   text eol=lf
+.gitignore text eol=lf
+
+# Binary / toolchain artifacts — git must never touch these
+*.exe      binary
+*.msg      binary
+*.gmv      binary
+*.bin      binary
+*.p        binary
+*.png      binary
+*.gif      binary
+*.genstate binary
+*.btrc     binary

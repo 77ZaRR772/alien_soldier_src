@@ -1,13 +1,33 @@
 # Alien Soldier (J) Makefile
 # Build configuration for AS assembler
 
+# Toolchain selection: auto-detect host OS/arch and pick the matching
+# build-tools folder under bin/. Override with: make PLATFORM=<subfolder>
+ifeq ($(OS),Windows_NT)
+    PLATFORM ?= windows_i386
+    AS_EXE = asw.exe
+    P2BIN_EXE = p2bin.exe
+else
+    UNAME_S := $(shell uname -s)
+    UNAME_M := $(shell uname -m)
+    ifeq ($(UNAME_S),Darwin)
+        PLATFORM ?= macos_$(UNAME_M)
+    else
+        PLATFORM ?= linux_$(UNAME_M)
+    endif
+    AS_EXE = asl
+    P2BIN_EXE = p2bin
+endif
+
+TOOLS_DIR = bin/$(PLATFORM)
+
 # Tools
-AS_BIN = bin/asw.exe
-P2BIN = bin/p2bin.exe
+AS_BIN = $(TOOLS_DIR)/$(AS_EXE)
+P2BIN = $(TOOLS_DIR)/$(P2BIN_EXE)
 AS_ARGS = -maxerrors 2
 
 # Set message path for AS assembler (needed for as.msg, cmdarg.msg, etc.)
-export AS_MSGPATH = bin
+export AS_MSGPATH = $(TOOLS_DIR)
 
 # Files
 SRC = alien_soldier_j.s

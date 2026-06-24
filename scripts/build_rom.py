@@ -67,10 +67,10 @@ if __name__ == '__main__':
                         help='Source assembly file (default: alien_soldier_j.s)')
     parser.add_argument('-o', '--output', default='asbuilt.bin',
                         help='Output ROM file (default: asbuilt.bin)')
-    parser.add_argument('--as-bin', default='bin/asw.exe',
-                        help='Path to AS assembler (default: bin/asw.exe)')
-    parser.add_argument('--p2bin', default='bin/p2bin.exe',
-                        help='Path to p2bin converter (default: bin/p2bin.exe)')
+    parser.add_argument('--as-bin', default='bin/windows_i386/asw.exe',
+                        help='Path to AS assembler (default: bin/windows_i386/asw.exe)')
+    parser.add_argument('--p2bin', default='bin/windows_i386/p2bin.exe',
+                        help='Path to p2bin converter (default: bin/windows_i386/p2bin.exe)')
     parser.add_argument('--as-args', default='-maxerrors 2',
                         help='Arguments for AS assembler (default: -maxerrors 2)')
 
